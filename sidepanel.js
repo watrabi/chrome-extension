@@ -5,7 +5,7 @@
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 
-let settings = { provider: "gemini", providers: {}, approve: true, yolo: false, unlimited: false, maxSteps: 40 };
+let settings = { provider: "gemini", providers: {}, exaKey: "", approve: true, yolo: false, unlimited: false, maxSteps: 40 };
 const cfg = () => providerConfig(settings.provider, settings.providers[settings.provider]);
 let history = [];          // Gemini "contents" array
 let running = false;
@@ -258,11 +258,12 @@ function providerProblem() {
 }
 
 async function loadSettings() {
-  const s = await chrome.storage.local.get(["provider", "providers", "apiKey", "model", "approve", "yolo", "unlimited", "maxSteps"]);
+  const s = await chrome.storage.local.get(["provider", "providers", "exaKey", "apiKey", "model", "approve", "yolo", "unlimited", "maxSteps"]);
   settings = {
     provider: PROVIDERS[s.provider] ? s.provider : "gemini",
     // Older versions stored a single Gemini key/model; carry them over.
     providers: s.providers || { gemini: { apiKey: s.apiKey || "", model: s.model || "" } },
+    exaKey: s.exaKey || "",
     approve: s.approve !== false,
     yolo: s.yolo === true,
     unlimited: s.unlimited === true,
@@ -270,6 +271,7 @@ async function loadSettings() {
   };
   fillProviderSelect();
   showProviderFields();
+  $("exaKey").value = settings.exaKey;
   $("approve").checked = settings.approve;
   $("yolo").checked = settings.yolo;
   $("unlimited").checked = settings.unlimited;
@@ -306,6 +308,7 @@ $("loadModels").onclick = async () => {
 
 $("save").onclick = async () => {
   captureFields();
+  settings.exaKey = $("exaKey").value.trim();
   settings.approve = $("approve").checked;
   settings.yolo = $("yolo").checked;
   settings.unlimited = $("unlimited").checked;
@@ -1210,16 +1213,20 @@ async function requestJson({ url, headers = {}, body, signal, cfg: c }) {
 // Notebook and past-chat tools live in memory.js.
 Object.assign(tools, NOTE_TOOLS);
 functionDeclarations.push(...NOTE_DECLARATIONS);
+// Exa web search (exa.js): only offered to the model once an Exa API key is set.
+Object.assign(tools, EXA_TOOLS);
+functionDeclarations.push(...EXA_DECLARATIONS);
 
 function buildSystemPrompt() {
   let t = SYSTEM_PROMPT + (settings.yolo ? YOLO_ADDENDUM : "");
   if (!cfg().vision) t += "\n\nNOTE: This model cannot see images, so screenshots are unavailable. Rely on get_page_state (element list with @x,y positions) and get_page_text.";
+  if (settings.exaKey) t += EXA_PROMPT;
   return t + notesPromptSection();
 }
 
 function callModel(signal) {
   const c = cfg();
-  const tools = functionDeclarations.filter((d) => c.vision || d.name !== "screenshot");
+  const tools = functionDeclarations.filter((d) => (c.vision || d.name !== "screenshot") && (settings.exaKey || !EXA_NAMES.has(d.name)));
   return callProvider(c, buildSystemPrompt(), history, tools, signal);
 }
 

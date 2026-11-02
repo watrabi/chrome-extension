@@ -44,6 +44,12 @@ Clicks, typing, key presses, drags and scrolling are sent as **trusted browser i
 
 Every conversation is saved automatically in the browser (`chrome.storage.local`) and the last one reopens when you open the panel. **History** lists saved chats (click one to continue it, ✕ to delete), **New** starts a fresh chat while keeping the old one, and **Export** downloads the current chat as a Markdown file. Screenshots aren't saved; everything else is, so a reopened chat keeps its full context. Your API key is never included in exports.
 
+## Web search (Exa)
+
+Add an [Exa](https://dashboard.exa.ai/api-keys) API key in **Settings** and the agent gains two tools: `web_search` (titles, URLs, dates and text snippets, with optional domain, category and date filters) and `read_url` (clean text of up to 5 URLs without opening a tab). Without a key the tools are hidden from the model entirely. Searching is much faster than driving a search engine through the browser; the agent opens a result in the browser only when it needs to interact with it. Rate limits get the same wait-and-retry handling as the model.
+
+Notes: search results are treated as untrusted web content. Your queries and the URLs it reads are sent to Exa. `read_url` asks for your approval (unless YOLO mode is on) because a fetched URL leaves your machine, which a malicious page could otherwise abuse to smuggle data out.
+
 ## Notebook, knowledge and past chats
 
 The agent has a persistent **notebook** that survives across chats: `save_note` (create, update, or append), `search_notes`, `read_note` and `delete_note`. Notes are Markdown with tags. The titles of its notes are included in its prompt each turn, so it knows what it already knows and can check before redoing research. It's also useful as a scratchpad on long tasks, since old steps get trimmed from its context but notes stay. Open the **Notes** panel to browse, edit, add, delete or export (JSON) its notes yourself. Deleting a note asks for approval unless YOLO mode is on, and the prompt forbids saving secrets or instructions found on web pages.

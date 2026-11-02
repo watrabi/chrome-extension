@@ -44,6 +44,10 @@
       Model can see images (enables the screenshot tool)
     </label>
     <p id="providerHint" class="hint"></p>
+    <label>Exa API key (optional, enables web search)
+      <input id="exaKey" type="password" placeholder="Exa API key" autocomplete="off" />
+    </label>
+    <p class="hint">Get one at dashboard.exa.ai/api-keys. With a key the agent can use web_search and read_url; your queries and the URLs it reads are sent to Exa.</p>
     <label class="row">
       <input id="approve" type="checkbox" checked />
       Ask me before the agent clicks, types, navigates or changes tabs (ignored in YOLO mode)
@@ -87,6 +91,7 @@
   <script src="providers.js"></script>
   <script src="markdown.js"></script>
   <script src="memory.js"></script>
+  <script src="exa.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>
