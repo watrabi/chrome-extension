@@ -26,7 +26,7 @@ let saveTimer = null;
 function addMsg(kind, text, persist = true) {
   const el = document.createElement("div");
   el.className = "msg " + kind;
-  el.textContent = text;
+  if (kind === "assistant") el.appendChild(renderMarkdown(text)); else el.textContent = text;
   logEl.appendChild(el);
   logEl.scrollTop = logEl.scrollHeight;
   if (persist) {
@@ -76,7 +76,7 @@ function renderLog() {
   for (const e of currentLog) {
     const el = document.createElement("div");
     el.className = "msg " + e.kind + (e.err ? " err" : "");
-    el.textContent = e.text;
+    if (e.kind === "assistant") el.appendChild(renderMarkdown(e.text)); else el.textContent = e.text;
     el._entry = e;
     logEl.appendChild(el);
   }
@@ -179,7 +179,7 @@ $("exportChat").onclick = exportChat;
 $("historyBtn").onclick = () => {
   const panel = $("historyPanel");
   panel.hidden = !panel.hidden;
-  if (!panel.hidden) renderHistoryList();
+  if (!panel.hidden) { $("notesPanel").hidden = true; renderHistoryList(); }
 };
 
 function setRunning(v) {
@@ -1207,10 +1207,14 @@ async function requestJson({ url, headers = {}, body, signal, cfg: c }) {
   }
 }
 
+// Notebook and past-chat tools live in memory.js.
+Object.assign(tools, NOTE_TOOLS);
+functionDeclarations.push(...NOTE_DECLARATIONS);
+
 function buildSystemPrompt() {
   let t = SYSTEM_PROMPT + (settings.yolo ? YOLO_ADDENDUM : "");
   if (!cfg().vision) t += "\n\nNOTE: This model cannot see images, so screenshots are unavailable. Rely on get_page_state (element list with @x,y positions) and get_page_text.";
-  return t;
+  return t + notesPromptSection();
 }
 
 function callModel(signal) {
@@ -1292,6 +1296,11 @@ async function send() {
   }
 }
 
+// Calls that change what is on the page, and calls that rely on element numbers / coordinates / focus.
+const PAGE_CHANGING = new Set(["click", "click_at", "navigate", "go_back", "press_key", "switch_tab", "open_tab", "close_tab", "drag"]);
+const PAGE_DEPENDENT = new Set(["click", "click_at", "type_text", "type_keys", "press_key", "move_mouse", "drag", "scroll_at"]);
+const changesPage = (name, args) => PAGE_CHANGING.has(name) || ((name === "type_text" || name === "type_keys") && !!args.submit);
+
 async function agentLoop(signal) {
   let lastSig = "", repeats = 0, fails = 0;
   for (let step = 0; settings.unlimited || step < settings.maxSteps; step++) {
@@ -1313,15 +1322,19 @@ async function agentLoop(signal) {
 
     const responseParts = [];
     const images = [];
+    let pageChanged = false; // set once a call in this batch has changed the page
     for (const call of calls) {
       const args = call.args || {};
       const tool = tools[call.name];
       let result;
       if (!tool) {
         result = { error: "Unknown tool " + call.name };
+      } else if (pageChanged && PAGE_DEPENDENT.has(call.name)) {
+        result = { skipped: true, error: "Skipped: an earlier action in this same turn changed the page, so element numbers and coordinates may be stale. Re-read the page (get_page_state) and redo this step." };
+        addMsg("tool", `⏭ ${call.name} skipped (an earlier call in this turn changed the page)`);
       } else {
         const desc = tool.describe(args);
-        const logLine = addMsg("tool", "▶ " + call.name + (Object.keys(args).length ? " " + JSON.stringify(args) : "") + (desc ? "\n  " + desc : ""));
+        const logLine = addMsg("tool", "▶ " + call.name + (Object.keys(args).length ? " " + JSON.stringify(args).slice(0, 300) : "") + (desc ? "\n  " + desc : ""));
         if (tool.risky && settings.approve && !settings.yolo && !(await askApproval(desc))) {
           result = { error: "The user denied this action. Do not retry it; ask the user what to do instead." };
           markErr(logLine);
@@ -1334,12 +1347,13 @@ async function agentLoop(signal) {
           }
         }
         if (result?.error) markErr(logLine);
+        if (!result?.error && changesPage(call.name, args)) pageChanged = true;
       }
       // Code-level nudges so a stuck model backs off even if it ignores the prompt.
       const sig = call.name + JSON.stringify(args);
       repeats = sig === lastSig ? repeats + 1 : 0;
       lastSig = sig;
-      const failed = !!(result && typeof result === "object" && (result.error || result.ok === false));
+      const failed = !!(result && typeof result === "object" && !result.skipped && (result.error || result.ok === false));
       fails = failed ? fails + 1 : 0;
       const warnings = [];
       if (repeats >= 2) warnings.push(`You have now run this exact action ${repeats + 1} times in a row. Do NOT run it again. Use a different method or a different route to the goal.`);
@@ -1351,6 +1365,13 @@ async function agentLoop(signal) {
       if (signal.aborted) throw new Error("Stopped.");
     }
 
+    // Several calls in one turn: only the newest page state is useful; drop the earlier copies to save tokens.
+    const lastWithPage = responseParts.map((p) => !!p.functionResponse?.response?.page).lastIndexOf(true);
+    responseParts.forEach((p, k) => {
+      const r = p.functionResponse?.response;
+      if (r?.page && k !== lastWithPage) r.page = "[page state omitted: see the last result in this turn]";
+    });
+
     pruneHistory();
     for (const img of images) responseParts.push({ inlineData: { mimeType: "image/jpeg", data: img } });
     history.push({ role: "user", parts: responseParts });
@@ -1360,3 +1381,5 @@ async function agentLoop(signal) {
 }
 
 loadSettings().then(restoreLastConversation);
+loadNotesIndex();
+initNotesUI();

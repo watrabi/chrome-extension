@@ -12,6 +12,7 @@
     <label id="yoloLabel" title="YOLO mode: the agent acts without asking for approval and without pausing to confirm risky actions">
       <input id="yolo" type="checkbox" /> YOLO
     </label>
+    <button id="notesBtn" title="The agent's notebook">Notes</button>
     <button id="historyBtn" title="Saved chats">History</button>
     <button id="newChat" title="Start a new chat (the current one stays saved)">New</button>
     <button id="exportChat" title="Download this chat as Markdown">Export</button>
@@ -62,6 +63,16 @@
     <div id="historyList"></div>
   </section>
 
+  <section id="notesPanel" hidden>
+    <div class="notesBar">
+      <button id="noteNew">New note</button>
+      <button id="notesExport" title="Download all notes as JSON">Export</button>
+      <span id="notesCount" class="hint"></span>
+    </div>
+    <div id="notesList"></div>
+    <div id="noteDetail" hidden></div>
+  </section>
+
   <main id="log"></main>
 
   <footer>
@@ -74,6 +85,8 @@
 
   <script src="prompt.js"></script>
   <script src="providers.js"></script>
+  <script src="markdown.js"></script>
+  <script src="memory.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

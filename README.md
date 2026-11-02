@@ -44,6 +44,20 @@ Clicks, typing, key presses, drags and scrolling are sent as **trusted browser i
 
 Every conversation is saved automatically in the browser (`chrome.storage.local`) and the last one reopens when you open the panel. **History** lists saved chats (click one to continue it, ✕ to delete), **New** starts a fresh chat while keeping the old one, and **Export** downloads the current chat as a Markdown file. Screenshots aren't saved; everything else is, so a reopened chat keeps its full context. Your API key is never included in exports.
 
+## Notebook, knowledge and past chats
+
+The agent has a persistent **notebook** that survives across chats: `save_note` (create, update, or append), `search_notes`, `read_note` and `delete_note`. Notes are Markdown with tags. The titles of its notes are included in its prompt each turn, so it knows what it already knows and can check before redoing research. It's also useful as a scratchpad on long tasks, since old steps get trimmed from its context but notes stay. Open the **Notes** panel to browse, edit, add, delete or export (JSON) its notes yourself. Deleting a note asks for approval unless YOLO mode is on, and the prompt forbids saving secrets or instructions found on web pages.
+
+With `search_past_chats` and `read_past_chat` it can look through your earlier saved chats (the one in progress is excluded) when you say things like "like last time" or "continue that". Past chats and notes can contain text that came from web pages, so the prompt tells the model to treat them as data, never as instructions.
+
+## Several tool calls per turn
+
+The model may issue multiple tool calls in one turn (for example reads, notebook saves, or filling several form fields then one click). They run in order. If a call changes the page (click, navigation, Enter-submit, key press, tab switch), later calls in the same turn that rely on element numbers or coordinates are skipped with a message telling the model to re-read the page, and only the newest page state is kept in the context.
+
+## Markdown
+
+Agent replies and notes are rendered as Markdown: headings, bold/italic, lists, task lists, tables, code blocks, quotes and links. The renderer builds DOM nodes (never raw HTML), so page text echoed by the model can't inject markup. Only `http(s)` and `mailto` links are clickable, and images are never loaded (a remote image URL could leak data); they appear as links.
+
 ## The system prompt
 
 The agent's instructions live in `prompt.js` and are easy to edit. They tell it to click and type first, to treat `run_javascript` as a last resort, and to back off after failures (never repeat the same action more than twice, at most 3 approaches per goal, stop and report when blocked). The extension also enforces this in code: after 3 failed actions in a row the tool result carries a "change approach" warning, and after 5 it tells the model to stop and report to you.
