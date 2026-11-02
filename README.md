@@ -18,6 +18,7 @@ It sees pages as a numbered list of interactive elements plus a text excerpt, an
 ## Safety
 
 - **Approval mode** (on by default): every click, keystroke, navigation and tab change needs your Allow/Deny in the panel. Turn it off in Settings only if you trust the task and the sites.
+- **YOLO mode** (toggle in the panel header): skips all approval prompts and tells the model not to pause for confirmation, even for purchases, sending messages or deleting data. The header turns red while it's on. It's off by default and turns off nothing else, so use it only on tasks and sites you trust.
 - The agent acts in your real, logged-in browser. Web pages can contain prompt-injection text; the system prompt tells the model to treat page text as data, but this is not a guarantee. Keep approval mode on for anything sensitive.
 - Your API key is stored in `chrome.storage.local` and sent only to `generativelanguage.googleapis.com`.
 

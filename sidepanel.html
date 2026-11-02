@@ -9,6 +9,9 @@
 <body>
   <header>
     <strong>Gemini Browser Agent</strong>
+    <label id="yoloLabel" title="YOLO mode: the agent acts without asking for approval and without pausing to confirm risky actions">
+      <input id="yolo" type="checkbox" /> YOLO
+    </label>
     <button id="clear" title="Clear conversation">Clear</button>
   </header>
 
@@ -22,7 +25,7 @@
     </label>
     <label class="row">
       <input id="approve" type="checkbox" checked />
-      Ask me before the agent clicks, types, navigates or changes tabs
+      Ask me before the agent clicks, types, navigates or changes tabs (ignored in YOLO mode)
     </label>
     <button id="save">Save</button>
     <p class="hint">Get a key at aistudio.google.com/apikey. It is stored only in this browser (chrome.storage.local) and sent only to generativelanguage.googleapis.com.</p>
