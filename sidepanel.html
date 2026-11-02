@@ -12,7 +12,9 @@
     <label id="yoloLabel" title="YOLO mode: the agent acts without asking for approval and without pausing to confirm risky actions">
       <input id="yolo" type="checkbox" /> YOLO
     </label>
-    <button id="clear" title="Clear conversation">Clear</button>
+    <button id="historyBtn" title="Saved chats">History</button>
+    <button id="newChat" title="Start a new chat (the current one stays saved)">New</button>
+    <button id="exportChat" title="Download this chat as Markdown">Export</button>
   </header>
 
   <details id="settings">
@@ -38,6 +40,10 @@
     <p class="hint">Get a key at aistudio.google.com/apikey. It is stored only in this browser (chrome.storage.local) and sent only to generativelanguage.googleapis.com.</p>
   </details>
 
+  <section id="historyPanel" hidden>
+    <div id="historyList"></div>
+  </section>
+
   <main id="log"></main>
 
   <footer>
@@ -48,6 +54,7 @@
     </div>
   </footer>
 
+  <script src="prompt.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

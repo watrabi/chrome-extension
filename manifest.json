@@ -9,7 +9,8 @@
     "scripting",
     "activeTab",
     "storage",
-    "debugger"
+    "debugger",
+    "unlimitedStorage"
   ],
   "host_permissions": [
     "<all_urls>"

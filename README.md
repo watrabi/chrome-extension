@@ -23,6 +23,14 @@ It sees pages as a numbered list of interactive elements plus a text excerpt, an
 
 Clicks, typing, key presses, drags and scrolling are sent as **trusted browser input** through the Chrome DevTools Protocol (`chrome.debugger`), so pages treat them like a real mouse and keyboard. While the agent is working, Chrome shows a "Gemini Browser Agent started debugging this browser" bar; it disappears when the task ends. If a page can't be debugged (e.g. `chrome://` pages) or another debugger is attached, the agent falls back to synthetic DOM events and tells the model so.
 
+## Saved chats
+
+Every conversation is saved automatically in the browser (`chrome.storage.local`) and the last one reopens when you open the panel. **History** lists saved chats (click one to continue it, ✕ to delete), **New** starts a fresh chat while keeping the old one, and **Export** downloads the current chat as a Markdown file. Screenshots aren't saved; everything else is, so a reopened chat keeps its full context. Your API key is never included in exports.
+
+## The system prompt
+
+The agent's instructions live in `prompt.js` and are easy to edit. They tell it to click and type first, to treat `run_javascript` as a last resort, and to back off after failures (never repeat the same action more than twice, at most 3 approaches per goal, stop and report when blocked). The extension also enforces this in code: after 3 failed actions in a row the tool result carries a "change approach" warning, and after 5 it tells the model to stop and report to you.
+
 ## Safety
 
 - **Approval mode** (on by default): every click, keystroke, navigation and tab change needs your Allow/Deny in the panel. Turn it off in Settings only if you trust the task and the sites.
