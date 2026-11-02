@@ -1,12 +1,12 @@
 // Gemini Browser Agent — side panel. Runs the agent loop:
 //   user task -> Gemini (with tools) -> tool calls executed in the browser -> results back -> ... -> final answer.
 
-const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 
-let settings = { apiKey: "", model: "gemini-3.5-flash-lite", approve: true, yolo: false, unlimited: false, maxSteps: 40 };
+let settings = { provider: "gemini", providers: {}, approve: true, yolo: false, unlimited: false, maxSteps: 40 };
+const cfg = () => providerConfig(settings.provider, settings.providers[settings.provider]);
 let history = [];          // Gemini "contents" array
 let running = false;
 let abortCtl = null;
@@ -215,39 +215,106 @@ function askApproval(description) {
 
 // ---------------------------------------------------------------- settings
 
+function fillProviderSelect() {
+  const sel = $("provider");
+  sel.textContent = "";
+  for (const [id, p] of Object.entries(PROVIDERS)) sel.add(new Option(p.label, id));
+}
+
+// Copy the visible provider fields into settings.providers[<current provider>].
+function captureFields() {
+  const id = settings.provider;
+  settings.providers[id] = {
+    ...(settings.providers[id] || {}),
+    apiKey: $("apiKey").value.trim(),
+    baseUrl: $("baseUrl").value.trim(),
+    model: $("model").value.trim(),
+    numCtx: parseInt($("numCtx").value) || undefined,
+    vision: $("vision").checked,
+  };
+}
+
+function showProviderFields() {
+  const c = cfg();
+  $("provider").value = c.id;
+  $("apiKey").value = c.apiKey;
+  $("baseUrl").value = c.baseUrl;
+  $("model").value = c.model;
+  $("numCtx").value = c.numCtx || "";
+  $("vision").checked = !!c.vision;
+  $("rowKeyLabel").textContent = c.needsKey ? "API key" : "API key (optional)";
+  $("rowBase").hidden = c.type === "gemini" || c.type === "anthropic";
+  $("rowCtx").hidden = c.type !== "ollama";
+  $("modelList").textContent = "";
+  $("providerHint").textContent = c.keyHelp || "";
+}
+
+function providerProblem() {
+  const c = cfg();
+  if (c.needsKey && !c.apiKey) return `Add your ${c.label} API key in Settings first.`;
+  if (!c.baseUrl) return "Set the base URL in Settings first.";
+  if (!c.model) return "Choose a model in Settings first (the Load button lists what the server has).";
+  return null;
+}
+
 async function loadSettings() {
-  const s = await chrome.storage.local.get(["apiKey", "model", "approve", "yolo", "unlimited", "maxSteps"]);
+  const s = await chrome.storage.local.get(["provider", "providers", "apiKey", "model", "approve", "yolo", "unlimited", "maxSteps"]);
   settings = {
-    apiKey: s.apiKey || "",
-    model: s.model || "gemini-3.5-flash-lite",
+    provider: PROVIDERS[s.provider] ? s.provider : "gemini",
+    // Older versions stored a single Gemini key/model; carry them over.
+    providers: s.providers || { gemini: { apiKey: s.apiKey || "", model: s.model || "" } },
     approve: s.approve !== false,
     yolo: s.yolo === true,
     unlimited: s.unlimited === true,
     maxSteps: Math.max(1, parseInt(s.maxSteps) || 40),
   };
-  $("apiKey").value = settings.apiKey;
-  $("model").value = settings.model;
+  fillProviderSelect();
+  showProviderFields();
   $("approve").checked = settings.approve;
   $("yolo").checked = settings.yolo;
   $("unlimited").checked = settings.unlimited;
   $("maxSteps").value = settings.maxSteps;
   $("maxSteps").disabled = settings.unlimited;
   document.body.classList.toggle("yolo-on", settings.yolo);
-  if (!settings.apiKey) $("settings").open = true;
+  updateOriginRule(cfg()).catch(() => {});
+  if (providerProblem()) $("settings").open = true;
 }
 
+$("provider").onchange = () => {
+  captureFields();
+  settings.provider = $("provider").value;
+  showProviderFields();
+};
+
+$("loadModels").onclick = async () => {
+  captureFields();
+  const c = cfg();
+  const hint = $("providerHint");
+  hint.textContent = "Loading models…";
+  try {
+    await updateOriginRule(c);
+    const models = await listModels(c);
+    const list = $("modelList");
+    list.textContent = "";
+    for (const m of models) list.appendChild(new Option(m, m));
+    if (!$("model").value && models.length) $("model").value = models[0];
+    hint.textContent = models.length ? `${models.length} models found. Type or pick one in the Model box.` : "Connected, but no models were listed.";
+  } catch (e) {
+    hint.textContent = `Could not load models: ${e.message}. ${c.type === "ollama" ? "Is Ollama running at " + c.baseUrl + "?" : "Check the key and base URL."}`;
+  }
+};
+
 $("save").onclick = async () => {
-  settings = {
-    apiKey: $("apiKey").value.trim(),
-    model: $("model").value.trim() || "gemini-3.5-flash-lite",
-    approve: $("approve").checked,
-    yolo: $("yolo").checked,
-    unlimited: $("unlimited").checked,
-    maxSteps: Math.max(1, parseInt($("maxSteps").value) || 40),
-  };
+  captureFields();
+  settings.approve = $("approve").checked;
+  settings.yolo = $("yolo").checked;
+  settings.unlimited = $("unlimited").checked;
+  settings.maxSteps = Math.max(1, parseInt($("maxSteps").value) || 40);
   await chrome.storage.local.set(settings);
+  showProviderFields();
+  updateOriginRule(cfg()).catch(() => {});
   $("settings").open = false;
-  addMsg("tool", "Settings saved.", false);
+  addMsg("tool", `Settings saved. Using ${cfg().label}: ${cfg().model}`, false);
 };
 
 $("yolo").onchange = async () => {
@@ -1071,8 +1138,10 @@ function retryDelaySeconds(res, errBody) {
   const info = (errBody?.error?.details || []).find((d) => /RetryInfo/.test(d["@type"] || ""));
   const fromInfo = parseFloat(info?.retryDelay);
   if (fromInfo > 0) return fromInfo;
-  const m = /retry in ([\d.]+)\s*s/i.exec(errBody?.error?.message || "");
-  return m ? parseFloat(m[1]) : null;
+  const headerMs = parseFloat(res.headers.get("retry-after-ms"));
+  if (headerMs > 0) return headerMs / 1000;
+  const m = /(?:retry|try again) in ([\d.]+)\s*(ms|s)/i.exec(apiErrorText(errBody, res));
+  return m ? (m[2].toLowerCase() === "ms" ? parseFloat(m[1]) / 1000 : parseFloat(m[1])) : null;
 }
 
 const MAX_RATE_LIMIT_WAIT = 15 * 60; // a wait this long means a daily quota, not a per-minute limit
@@ -1089,45 +1158,65 @@ async function waitWithCountdown(seconds, label, signal) {
   }
 }
 
-async function callGemini(signal) {
-  const url = `${API_BASE}${encodeURIComponent(settings.model)}:generateContent`;
-  const body = JSON.stringify({
-    systemInstruction: { parts: [{ text: settings.yolo ? SYSTEM_PROMPT + YOLO_ADDENDUM : SYSTEM_PROMPT }] },
-    contents: history,
-    tools: [{ functionDeclarations }],
-  });
+function apiErrorText(errBody, res) {
+  const e = errBody?.error;
+  if (typeof e === "string") return e;
+  return e?.message || errBody?.message || res?.statusText || "request failed";
+}
+
+// POST JSON with shared handling: waits out rate limits (429), retries brief server errors, friendly errors.
+async function requestJson({ url, headers = {}, body, signal, cfg: c }) {
+  const payload = JSON.stringify(body);
   let rateLimited = 0, serverErrors = 0;
   for (;;) {
-    const res = await fetch(url, {
-      method: "POST",
-      signal,
-      headers: { "Content-Type": "application/json", "x-goog-api-key": settings.apiKey },
-      body,
-    });
+    let res;
+    try {
+      res = await fetch(url, { method: "POST", signal, headers: { "Content-Type": "application/json", ...headers }, body: payload });
+    } catch (e) {
+      if (signal.aborted) throw e;
+      throw new Error(`Could not reach ${c.label} at ${url} (${e.message}). ` +
+        (c.type === "ollama" ? "Is Ollama running, and is the base URL right?" : "Check the base URL and your connection."));
+    }
     if (res.ok) return res.json();
 
     let errBody = null;
     try { errBody = await res.json(); } catch {}
-    const msg = errBody?.error?.message || res.statusText;
+    const msg = apiErrorText(errBody, res);
 
     if (res.status === 429) {
-      // Rate limited: wait as long as Gemini asks (plus a small buffer), as many times as needed.
+      // Rate limited: wait as long as the provider asks (plus a small buffer), as many times as needed.
       rateLimited++;
       const asked = retryDelaySeconds(res, errBody);
       const wait = (asked ?? Math.min(5 * 2 ** Math.min(rateLimited - 1, 4), 60)) + 1;
       if (wait > MAX_RATE_LIMIT_WAIT) {
-        throw new Error(`Gemini rate limit: asked to wait ${Math.round(wait / 60)} min, which usually means a daily quota is used up. ${msg}`);
+        throw new Error(`${c.label} rate limit: asked to wait ${Math.round(wait / 60)} min, which usually means a daily quota is used up. ${msg}`);
       }
-      await waitWithCountdown(wait, "Gemini rate limit hit.", signal);
+      await waitWithCountdown(wait, `${c.label} rate limit hit.`, signal);
       continue;
     }
     if (res.status >= 500 && serverErrors < 5) {
       serverErrors++;
-      await waitWithCountdown(Math.min(3 * 2 ** (serverErrors - 1), 30), `Gemini server error (${res.status}).`, signal);
+      await waitWithCountdown(Math.min(3 * 2 ** (serverErrors - 1), 30), `${c.label} server error (${res.status}).`, signal);
       continue;
     }
-    throw new Error(`Gemini API ${res.status}: ${msg}`);
+    let hint = "";
+    if (/tool/i.test(msg) && /support|not (available|enabled)/i.test(msg)) hint = " Pick a model that supports tool/function calling.";
+    else if (res.status === 403 && c.type === "ollama") hint = " Ollama rejected the request origin: save Settings again, or start Ollama with OLLAMA_ORIGINS=chrome-extension://*";
+    else if (res.status === 404 && c.type === "ollama") hint = " Is the model pulled? Run: ollama pull " + c.model;
+    throw new Error(`${c.label} API ${res.status}: ${msg}${hint}`);
   }
+}
+
+function buildSystemPrompt() {
+  let t = SYSTEM_PROMPT + (settings.yolo ? YOLO_ADDENDUM : "");
+  if (!cfg().vision) t += "\n\nNOTE: This model cannot see images, so screenshots are unavailable. Rely on get_page_state (element list with @x,y positions) and get_page_text.";
+  return t;
+}
+
+function callModel(signal) {
+  const c = cfg();
+  const tools = functionDeclarations.filter((d) => c.vision || d.name !== "screenshot");
+  return callProvider(c, buildSystemPrompt(), history, tools, signal);
 }
 
 // Keep history small so long (or unlimited) runs don't blow up the context window:
@@ -1168,11 +1257,21 @@ function trimHistory(promptTokens) {
 async function send() {
   const text = $("input").value.trim();
   if (!text || running) return;
-  if (!settings.apiKey) { $("settings").open = true; addMsg("error", "Add your Gemini API key in Settings first."); return; }
+  const problem = providerProblem();
+  if (problem) { $("settings").open = true; addMsg("error", problem, false); return; }
   $("input").value = "";
   if (!convId) { convId = Date.now().toString(36) + Math.random().toString(36).slice(2, 6); convCreated = Date.now(); }
   addMsg("user", text);
-  history.push({ role: "user", parts: [{ text }] });
+  // If the previous run was stopped mid-tool-call, close the dangling call so every provider accepts the next message.
+  const lastTurn = history[history.length - 1];
+  const dangling = lastTurn?.role === "model" ? (lastTurn.parts || []).filter((p) => p.functionCall) : [];
+  history.push({
+    role: "user",
+    parts: [
+      ...dangling.map((p) => ({ functionResponse: { name: p.functionCall.name, response: { error: "Interrupted before this action ran." } } })),
+      { text },
+    ],
+  });
 
   abortCtl = new AbortController();
   setRunning(true);
@@ -1197,7 +1296,7 @@ async function agentLoop(signal) {
   let lastSig = "", repeats = 0, fails = 0;
   for (let step = 0; settings.unlimited || step < settings.maxSteps; step++) {
     if (signal.aborted) throw new Error("Stopped.");
-    const data = await callGemini(signal);
+    const data = await callModel(signal);
     trimHistory(data.usageMetadata?.promptTokenCount);
     const content = data.candidates?.[0]?.content;
     if (!content?.parts?.length) {

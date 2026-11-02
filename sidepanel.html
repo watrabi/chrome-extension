@@ -19,12 +19,30 @@
 
   <details id="settings">
     <summary>Settings</summary>
-    <label>Gemini API key
-      <input id="apiKey" type="password" placeholder="AIza..." autocomplete="off" />
+    <label>Provider
+      <select id="provider"></select>
+    </label>
+    <label id="rowKey"><span id="rowKeyLabel">API key</span>
+      <input id="apiKey" type="password" placeholder="API key" autocomplete="off" />
+    </label>
+    <label id="rowBase">Base URL
+      <input id="baseUrl" type="text" placeholder="http://localhost:11434" autocomplete="off" />
     </label>
     <label>Model
-      <input id="model" type="text" placeholder="gemini-3.5-flash-lite" />
+      <span class="inline">
+        <input id="model" type="text" list="modelList" placeholder="model name" autocomplete="off" />
+        <button id="loadModels" type="button" title="List the models this provider offers">Load</button>
+      </span>
+      <datalist id="modelList"></datalist>
     </label>
+    <label id="rowCtx">Context length (tokens)
+      <input id="numCtx" type="number" min="2048" step="1024" placeholder="32768" />
+    </label>
+    <label class="row">
+      <input id="vision" type="checkbox" />
+      Model can see images (enables the screenshot tool)
+    </label>
+    <p id="providerHint" class="hint"></p>
     <label class="row">
       <input id="approve" type="checkbox" checked />
       Ask me before the agent clicks, types, navigates or changes tabs (ignored in YOLO mode)
@@ -37,7 +55,7 @@
       <input id="maxSteps" type="number" min="1" step="1" value="40" />
     </label>
     <button id="save">Save</button>
-    <p class="hint">Get a key at aistudio.google.com/apikey. It is stored only in this browser (chrome.storage.local) and sent only to generativelanguage.googleapis.com.</p>
+    <p class="hint">API keys are stored only in this browser (chrome.storage.local) and are sent only to the provider you select.</p>
   </details>
 
   <section id="historyPanel" hidden>
@@ -55,6 +73,7 @@
   </footer>
 
   <script src="prompt.js"></script>
+  <script src="providers.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

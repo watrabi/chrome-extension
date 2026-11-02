@@ -1,13 +1,30 @@
 # Gemini Browser Agent
 
-A small Chrome extension (Manifest V3) that connects to the Gemini API and lets the model drive your browser from a side-panel chat, similar to Claude in Chrome.
+A small Chrome extension (Manifest V3) that connects to the AI provider of your choice (Gemini, Ollama, OpenAI, Anthropic, OpenRouter, Groq, LM Studio, or any OpenAI-compatible server) and lets the model drive your browser from a side-panel chat, similar to Claude in Chrome.
 
 ## Install
 
-1. Get a Gemini API key at <https://aistudio.google.com/apikey>.
+1. Pick a provider (see **Providers** below) and get an API key if it needs one, e.g. Gemini at <https://aistudio.google.com/apikey>. Ollama and LM Studio need none.
 2. Open `chrome://extensions`, enable **Developer mode**, click **Load unpacked**, and pick this folder.
 3. Click the extension icon to open the side panel, open **Settings**, paste your key and click **Save**.
 4. Type a task, e.g. "Search for the cheapest USB-C hub on this page and summarize the top 3".
+
+## Providers
+
+Choose one in **Settings -> Provider**. Each provider remembers its own key, URL and model, and **Load** lists the models it offers. Chats are stored in one neutral format, so you can switch provider mid-conversation.
+
+| Provider | Notes |
+| --- | --- |
+| Google Gemini | Default (`gemini-3.5-flash-lite`). |
+| Ollama (local) | `http://localhost:11434`, no key. Pick a model with tool support (e.g. `qwen3`, `llama3.1`). Tick **Vision** only for vision models (`qwen2.5vl`, `llama3.2-vision`, `gemma3`). The context length defaults to 32768 tokens because Ollama's own default (4096) is too small for this agent. |
+| OpenAI, OpenRouter, Groq | Hosted, need an API key. |
+| Anthropic (Claude) | Needs an API key. |
+| LM Studio (local) | `http://localhost:1234/v1`, no key. |
+| Custom (OpenAI-compatible) | Any server with `/chat/completions` (vLLM, llama.cpp, LiteLLM, Together, DeepSeek, Mistral, ...). Base URL usually ends in `/v1`. |
+
+Models that can't see images (**Vision** unticked) don't get the screenshot tool; they work from the page's element list and text instead.
+
+**Ollama and CORS:** Ollama refuses requests from `chrome-extension://` origins unless started with `OLLAMA_ORIGINS`. For plain-http providers the extension removes the `Origin` header from its own requests (using `declarativeNetRequest`), so it works out of the box; you can also start Ollama with `OLLAMA_ORIGINS=chrome-extension://*`.
 
 ## What the agent can do
 
@@ -36,7 +53,7 @@ The agent's instructions live in `prompt.js` and are easy to edit. They tell it 
 - **Approval mode** (on by default): every click, keystroke, navigation and tab change needs your Allow/Deny in the panel. Turn it off in Settings only if you trust the task and the sites.
 - **YOLO mode** (toggle in the panel header): skips all approval prompts and tells the model not to pause for confirmation, even for purchases, sending messages or deleting data. The header turns red while it's on. It's off by default and turns off nothing else, so use it only on tasks and sites you trust.
 - The agent acts in your real, logged-in browser. Web pages can contain prompt-injection text; the system prompt tells the model to treat page text as data, but this is not a guarantee. Keep approval mode on for anything sensitive.
-- Your API key is stored in `chrome.storage.local` and sent only to `generativelanguage.googleapis.com`.
+- Your API keys are stored in `chrome.storage.local` and sent only to the provider you select.
 
 ## Step limit / unlimited steps
 
@@ -44,11 +61,11 @@ By default a task stops after 40 steps (model turns). In **Settings** you can ch
 
 ## Rate limits
 
-If Gemini returns a 429 (rate limit), the agent waits for the delay Gemini asks for (plus a second), shows a live countdown in the panel, and retries automatically, as many times as needed. **Stop** cancels the wait. If the requested wait is over 15 minutes (which usually means a daily quota is used up) it stops with an error instead of hanging. Temporary 5xx server errors are retried up to 5 times with backoff.
+If the provider returns a 429 (rate limit), the agent waits for the delay it asks for (plus a second), shows a live countdown in the panel, and retries automatically, as many times as needed. **Stop** cancels the wait. If the requested wait is over 15 minutes (which usually means a daily quota is used up) it stops with an error instead of hanging. Temporary 5xx server errors are retried up to 5 times with backoff.
 
 ## Limitations
 
 - Element indices don't cover shadow DOM or cross-origin iframes (use the screenshot + cursor tools for those). Native browser popups, like an open `<select>` dropdown, can't be operated.
 - Cannot run on `chrome://` pages or the Chrome Web Store.
-- The default model is `gemini-3.5-flash-lite`; change it in Settings (any Gemini model that supports function calling).
+- Whatever model you choose must support tool/function calling. Small local models are noticeably less reliable at multi-step browsing than large hosted ones.
 - No icons are bundled; Chrome shows a default one.

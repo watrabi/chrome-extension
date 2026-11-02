@@ -10,7 +10,8 @@
     "activeTab",
     "storage",
     "debugger",
-    "unlimitedStorage"
+    "unlimitedStorage",
+    "declarativeNetRequest"
   ],
   "host_permissions": [
     "<all_urls>"
