@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Gemini Browser Agent</title>
+  <link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <header>
+    <strong>Gemini Browser Agent</strong>
+    <button id="clear" title="Clear conversation">Clear</button>
+  </header>
+
+  <details id="settings">
+    <summary>Settings</summary>
+    <label>Gemini API key
+      <input id="apiKey" type="password" placeholder="AIza..." autocomplete="off" />
+    </label>
+    <label>Model
+      <input id="model" type="text" placeholder="gemini-2.5-flash" />
+    </label>
+    <label class="row">
+      <input id="approve" type="checkbox" checked />
+      Ask me before the agent clicks, types, navigates or changes tabs
+    </label>
+    <button id="save">Save</button>
+    <p class="hint">Get a key at aistudio.google.com/apikey. It is stored only in this browser (chrome.storage.local) and sent only to generativelanguage.googleapis.com.</p>
+  </details>
+
+  <main id="log"></main>
+
+  <footer>
+    <textarea id="input" rows="2" placeholder="Tell the agent what to do in this tab…"></textarea>
+    <div class="buttons">
+      <button id="send">Send</button>
+      <button id="stop" hidden>Stop</button>
+    </div>
+  </footer>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
