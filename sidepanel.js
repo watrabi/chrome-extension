@@ -246,6 +246,17 @@ async function pageMouse(action, a) {
     return el;
   };
 
+  if (action === "cursor") {
+    place(a.x, a.y);
+    if (a.ripple) ripple(a.x, a.y);
+    return { ok: true, hit: desc(deep(a.x, a.y)) };
+  }
+  if (action === "focused") {
+    const el = focusedEl();
+    if (!el || el === document.body || el === document.documentElement) return { ok: false, error: "Nothing is focused. Use click_at on a text field first." };
+    return { ok: true, typed_into: desc(el) };
+  }
+
   if (action === "move" || action === "click" || action === "drag" || action === "scroll") {
     const x = px(a.x, innerWidth), y = px(a.y, innerHeight);
     place(x, y);
@@ -359,6 +370,14 @@ async function pageMouse(action, a) {
   return { ok: false, error: "Unknown mouse action " + action };
 }
 
+function pageLocate(id) {
+  const el = document.querySelector(`[data-gx-id="${id}"]`);
+  if (!el) return { ok: false, error: "Element not found. Call get_page_state to refresh element indices." };
+  el.scrollIntoView({ block: "center", inline: "center" });
+  const r = el.getBoundingClientRect();
+  return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+}
+
 function pageKey(key) {
   const el = document.activeElement || document.body;
   const init = { key, code: key.length === 1 ? "Key" + key.toUpperCase() : key, bubbles: true, cancelable: true };
@@ -411,6 +430,146 @@ function ensureHttp(url) {
   return /^[a-z][a-z0-9+.-]*:/i.test(url) ? url : "https://" + url;
 }
 
+// ---------------------------------------------------------------- trusted input (Chrome DevTools Protocol)
+// Synthetic DOM events have isTrusted=false and many sites ignore them. chrome.debugger lets us send
+// real mouse/keyboard input. Chrome shows a "started debugging this browser" bar while attached.
+
+let dbgTabId = null;
+
+async function cdp(method, params = {}) {
+  if (dbgTabId !== activeTabId) {
+    await detachDebugger();
+    try {
+      await chrome.debugger.attach({ tabId: activeTabId }, "1.3");
+    } catch (e) {
+      if (!/already attached/i.test(e.message)) throw e;
+    }
+    dbgTabId = activeTabId;
+  }
+  return chrome.debugger.sendCommand({ tabId: dbgTabId }, method, params);
+}
+
+async function detachDebugger() {
+  if (dbgTabId == null) return;
+  const id = dbgTabId;
+  dbgTabId = null;
+  await chrome.debugger.detach({ tabId: id }).catch(() => {});
+}
+
+chrome.debugger.onDetach.addListener((src) => { if (src.tabId === dbgTabId) dbgTabId = null; });
+
+const mouseEv = (type, x, y, extra = {}) => cdp("Input.dispatchMouseEvent", { type, x, y, ...extra });
+
+async function gridToPx(...pairs) {
+  const vp = await inPage(() => ({ w: innerWidth, h: innerHeight }));
+  if (!vp?.w) throw new Error("Cannot read viewport (restricted page?)");
+  const c = (v, size) => Math.max(0, Math.min(size - 1, Math.round(((Number(v) || 0) / 1000) * size)));
+  return pairs.map(([gx, gy]) => ({ x: c(gx, vp.w), y: c(gy, vp.h) }));
+}
+
+const showCursor = (x, y, ripple = false) => inPage(pageMouse, ["cursor", { x, y, ripple }]);
+
+const BUTTONS = { left: ["left", 1], right: ["right", 2], middle: ["middle", 4] };
+
+async function trustedClickPx(x, y, opts = {}) {
+  const cur = await showCursor(x, y, true);
+  await sleep(220); // let the cursor glide there
+  const [name, mask] = BUTTONS[opts.button] || BUTTONS.left;
+  await mouseEv("mouseMoved", x, y);
+  for (let n = 1; n <= (opts.double ? 2 : 1); n++) {
+    await mouseEv("mousePressed", x, y, { button: name, buttons: mask, clickCount: n });
+    await sleep(40);
+    await mouseEv("mouseReleased", x, y, { button: name, buttons: 0, clickCount: n });
+    await sleep(60);
+  }
+  return { ok: true, trusted: true, pixel: [x, y], hit: cur?.hit };
+}
+
+async function trustedMove(x, y) {
+  const cur = await showCursor(x, y);
+  await sleep(200);
+  await mouseEv("mouseMoved", x, y);
+  return { ok: true, trusted: true, pixel: [x, y], hit: cur?.hit };
+}
+
+async function trustedDrag(a, b) {
+  const start = await showCursor(a.x, a.y, true);
+  await sleep(220);
+  await mouseEv("mouseMoved", a.x, a.y);
+  await mouseEv("mousePressed", a.x, a.y, { button: "left", buttons: 1, clickCount: 1 });
+  const steps = 12;
+  for (let i = 1; i <= steps; i++) {
+    const x = Math.round(a.x + ((b.x - a.x) * i) / steps), y = Math.round(a.y + ((b.y - a.y) * i) / steps);
+    await showCursor(x, y);
+    await mouseEv("mouseMoved", x, y, { button: "left", buttons: 1 });
+    await sleep(30);
+  }
+  await mouseEv("mouseReleased", b.x, b.y, { button: "left", buttons: 0, clickCount: 1 });
+  const end = await showCursor(b.x, b.y, true);
+  return { ok: true, trusted: true, from: { pixel: [a.x, a.y], hit: start?.hit }, to: { pixel: [b.x, b.y], hit: end?.hit } };
+}
+
+async function trustedScroll(x, y, dx, dy) {
+  const cur = await showCursor(x, y);
+  await sleep(200);
+  await mouseEv("mouseMoved", x, y);
+  await mouseEv("mouseWheel", x, y, { deltaX: dx, deltaY: dy });
+  await sleep(450);
+  return { ok: true, trusted: true, pixel: [x, y], hit: cur?.hit };
+}
+
+const KEYS = Object.fromEntries(Object.entries({
+  enter: [13, "Enter", "\r"], escape: [27, "Escape"], esc: [27, "Escape"], tab: [9, "Tab"], backspace: [8, "Backspace"],
+  delete: [46, "Delete"], arrowup: [38, "ArrowUp"], arrowdown: [40, "ArrowDown"], arrowleft: [37, "ArrowLeft"],
+  arrowright: [39, "ArrowRight"], up: [38, "ArrowUp"], down: [40, "ArrowDown"], left: [37, "ArrowLeft"], right: [39, "ArrowRight"],
+  home: [36, "Home"], end: [35, "End"], pageup: [33, "PageUp"], pagedown: [34, "PageDown"], space: [32, "Space", " "], " ": [32, "Space", " "],
+}));
+const MODS = { alt: 1, option: 1, control: 2, ctrl: 2, meta: 4, cmd: 4, command: 4, shift: 8 };
+const EDIT_COMMANDS = { a: "selectAll", c: "copy", x: "cut", v: "paste", z: "undo" };
+
+async function trustedKey(spec) {
+  const parts = String(spec).split("+");
+  const main = parts.pop() || "+";
+  let modifiers = 0;
+  for (const m of parts) modifiers |= MODS[m.toLowerCase()] || 0;
+  let key, code, vk, text;
+  const named = KEYS[main.toLowerCase()];
+  if (named) {
+    [vk, key, text] = named;
+    code = key === "Space" ? "Space" : key;
+    key = key === "Space" ? " " : key;
+  } else if (main.length === 1) {
+    key = main; vk = main.toUpperCase().charCodeAt(0);
+    code = /[a-z]/i.test(main) ? "Key" + main.toUpperCase() : /\d/.test(main) ? "Digit" + main : "";
+    text = main;
+  } else {
+    key = code = main; vk = 0;
+  }
+  const shortcut = modifiers & (1 | 2 | 4);
+  if (shortcut) text = undefined;
+  const commands = shortcut && modifiers & (2 | 4) && EDIT_COMMANDS[main.toLowerCase()] ? [EDIT_COMMANDS[main.toLowerCase()]] : undefined;
+  const base = { key, code, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk, modifiers };
+  await cdp("Input.dispatchKeyEvent", { ...base, type: text ? "keyDown" : "rawKeyDown", text, unmodifiedText: text, commands });
+  await cdp("Input.dispatchKeyEvent", { ...base, type: "keyUp" });
+}
+
+async function trustedType(text, clear, submit) {
+  if (clear) await trustedKey("Control+a");
+  if (text) await cdp("Input.insertText", { text });
+  if (submit) await trustedKey("Enter");
+}
+
+// Try real input first; fall back to synthetic DOM events (e.g. page can't be debugged).
+async function viaTrusted(trusted, fallback) {
+  try {
+    return await trusted();
+  } catch (e) {
+    const r = await fallback();
+    if (r && typeof r === "object") r.note = "Used synthetic events (trusted input unavailable: " + e.message + "). Some sites may ignore them.";
+    return r;
+  }
+}
+
 // name -> { risky, describe(args), run(args) }
 const tools = {
   get_page_state: {
@@ -427,10 +586,16 @@ const tools = {
     risky: true,
     describe: (a) => `Click [${a.index}] ${lastLabels[a.index] || ""}`,
     run: async (a) => {
-      const r = await inPage(pageClick, [a.index]);
+      const loc = await inPage(pageLocate, [a.index]);
+      if (!loc?.ok) return loc;
+      await sleep(120);
+      const r = await viaTrusted(
+        () => trustedClickPx(loc.x, loc.y),
+        () => inPage(pageClick, [a.index]),
+      );
       if (!r?.ok) return r;
       await waitForLoad(activeTabId, 4000);
-      return { ok: true, page: await stateText() };
+      return { ...r, page: await stateText() };
     },
   },
   type_text: {
@@ -447,7 +612,10 @@ const tools = {
     risky: true,
     describe: (a) => `Press key ${a.key}`,
     run: async (a) => {
-      const r = await inPage(pageKey, [String(a.key)]);
+      const r = await viaTrusted(
+        async () => { await trustedKey(a.key); return { ok: true, trusted: true }; },
+        () => inPage(pageKey, [String(a.key)]),
+      );
       await waitForLoad(activeTabId, 3000);
       return { ...r, page: await stateText() };
     },
@@ -464,13 +632,19 @@ const tools = {
   move_mouse: {
     risky: false,
     describe: (a) => `Move cursor to (${a.x}, ${a.y})`,
-    run: async (a) => await inPage(pageMouse, ["move", a]),
+    run: async (a) => viaTrusted(
+      async () => { const [p] = await gridToPx([a.x, a.y]); return trustedMove(p.x, p.y); },
+      () => inPage(pageMouse, ["move", a]),
+    ),
   },
   click_at: {
     risky: true,
     describe: (a) => `${a.double ? "Double-click" : a.button === "right" ? "Right-click" : "Click"} at (${a.x}, ${a.y})`,
     run: async (a) => {
-      const r = await inPage(pageMouse, ["click", a]);
+      const r = await viaTrusted(
+        async () => { const [p] = await gridToPx([a.x, a.y]); return trustedClickPx(p.x, p.y, a); },
+        () => inPage(pageMouse, ["click", a]),
+      );
       if (!r?.ok) return r;
       await waitForLoad(activeTabId, 3000);
       return { ...r, page: await stateText() };
@@ -480,7 +654,10 @@ const tools = {
     risky: true,
     describe: (a) => `Drag (${a.x}, ${a.y}) → (${a.x2}, ${a.y2})`,
     run: async (a) => {
-      const r = await inPage(pageMouse, ["drag", a]);
+      const r = await viaTrusted(
+        async () => { const [p, q] = await gridToPx([a.x, a.y], [a.x2, a.y2]); return trustedDrag(p, q); },
+        () => inPage(pageMouse, ["drag", a]),
+      );
       if (!r?.ok) return r;
       await sleep(400);
       return { ...r, page: await stateText() };
@@ -490,9 +667,11 @@ const tools = {
     risky: false,
     describe: (a) => `Scroll at (${a.x}, ${a.y}) by (${a.dx || 0}, ${a.dy || 0})`,
     run: async (a) => {
-      const r = await inPage(pageMouse, ["scroll", a]);
+      const r = await viaTrusted(
+        async () => { const [p] = await gridToPx([a.x, a.y]); return trustedScroll(p.x, p.y, Number(a.dx) || 0, Number(a.dy) || 0); },
+        () => inPage(pageMouse, ["scroll", a]),
+      );
       if (!r?.ok) return r;
-      await sleep(300);
       return { ...r, page: await stateText() };
     },
   },
@@ -500,7 +679,12 @@ const tools = {
     risky: true,
     describe: (a) => `Type "${a.text}" into the focused element${a.submit ? " and press Enter" : ""}`,
     run: async (a) => {
-      const r = await inPage(pageMouse, ["keys", a]);
+      const f = await inPage(pageMouse, ["focused", {}]);
+      if (!f?.ok) return f;
+      const r = await viaTrusted(
+        async () => { await trustedType(String(a.text ?? ""), !!a.clear, !!a.submit); return { ok: true, trusted: true, typed_into: f.typed_into }; },
+        () => inPage(pageMouse, ["keys", a]),
+      );
       if (!r?.ok) return r;
       await waitForLoad(activeTabId, a.submit ? 6000 : 800);
       return { ...r, page: await stateText() };
@@ -685,6 +869,7 @@ async function send() {
   } catch (e) {
     addMsg("error", abortCtl.signal.aborted ? "Stopped." : e.message);
   } finally {
+    await detachDebugger();
     setRunning(false);
     $("input").focus();
   }

@@ -17,6 +17,10 @@ A small Chrome extension (Manifest V3) that connects to the Gemini API and lets 
 
 It sees pages as a numbered list of interactive elements plus a text excerpt, and refers to elements by number. It works in the current window's active tab at the time you send a message.
 
+## Real input
+
+Clicks, typing, key presses, drags and scrolling are sent as **trusted browser input** through the Chrome DevTools Protocol (`chrome.debugger`), so pages treat them like a real mouse and keyboard. While the agent is working, Chrome shows a "Gemini Browser Agent started debugging this browser" bar; it disappears when the task ends. If a page can't be debugged (e.g. `chrome://` pages) or another debugger is attached, the agent falls back to synthetic DOM events and tells the model so.
+
 ## Safety
 
 - **Approval mode** (on by default): every click, keystroke, navigation and tab change needs your Allow/Deny in the panel. Turn it off in Settings only if you trust the task and the sites.
@@ -26,7 +30,7 @@ It sees pages as a numbered list of interactive elements plus a text excerpt, an
 
 ## Limitations
 
-- Synthetic DOM events: some sites ignore non-trusted clicks/keys, and elements inside shadow DOM or cross-origin iframes are not seen.
+- Element indices don't cover shadow DOM or cross-origin iframes (use the screenshot + cursor tools for those). Native browser popups, like an open `<select>` dropdown, can't be operated.
 - Cannot run on `chrome://` pages or the Chrome Web Store.
 - The default model is `gemini-3.5-flash-lite`; change it in Settings (any Gemini model that supports function calling).
 - No icons are bundled; Chrome shows a default one.
