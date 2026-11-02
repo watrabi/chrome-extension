@@ -30,6 +30,10 @@ Clicks, typing, key presses, drags and scrolling are sent as **trusted browser i
 - The agent acts in your real, logged-in browser. Web pages can contain prompt-injection text; the system prompt tells the model to treat page text as data, but this is not a guarantee. Keep approval mode on for anything sensitive.
 - Your API key is stored in `chrome.storage.local` and sent only to `generativelanguage.googleapis.com`.
 
+## Rate limits
+
+If Gemini returns a 429 (rate limit), the agent waits for the delay Gemini asks for (plus a second), shows a live countdown in the panel, and retries automatically, as many times as needed. **Stop** cancels the wait. If the requested wait is over 15 minutes (which usually means a daily quota is used up) it stops with an error instead of hanging. Temporary 5xx server errors are retried up to 5 times with backoff.
+
 ## Limitations
 
 - Element indices don't cover shadow DOM or cross-origin iframes (use the screenshot + cursor tools for those). Native browser popups, like an open `<select>` dropdown, can't be operated.
