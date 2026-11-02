@@ -349,7 +349,8 @@ function pageSnapshot(maxElements) {
   const selector = [
     "a[href]", "button", "input", "select", "textarea", "summary",
     "[role=button]", "[role=link]", "[role=checkbox]", "[role=radio]", "[role=tab]",
-    "[role=menuitem]", "[role=option]", "[role=switch]", "[role=combobox]", "[role=textbox]",
+    "[role=menuitem]", "[role=menuitemcheckbox]", "[role=menuitemradio]", "[role=option]", "[role=treeitem]", "[role=switch]", "[role=combobox]", "[role=textbox]",
+    "[aria-haspopup]:not([aria-haspopup=false])", "[aria-expanded]",
     "[contenteditable='']", "[contenteditable=true]", "[onclick]", "[tabindex]:not([tabindex='-1'])",
   ].join(",");
   const clip = (s, n) => { s = (s || "").replace(/\s+/g, " ").trim(); return s.length > n ? s.slice(0, n - 1) + "…" : s; };
@@ -376,9 +377,21 @@ function pageSnapshot(maxElements) {
       if (type !== "password" && el.value) extra += ` value="${clip(el.value, 40)}"`;
       if (type === "checkbox" || type === "radio") extra += el.checked ? " checked" : " unchecked";
     } else if (tag === "select") {
-      extra += ` value="${clip(el.selectedOptions[0]?.text, 40)}" options=[${[...el.options].slice(0, 12).map((o) => clip(o.text, 25)).join(" | ")}]`;
+      // Full list (up to 40) with 0-based positions; * marks what is selected, (x) marks disabled options.
+      const opts = [...el.options];
+      const shown = opts.slice(0, 40).map((o, k) => `${k}:${clip(o.text, 30)}${o.selected ? "*" : ""}${o.disabled ? "(x)" : ""}`).join(" | ");
+      const chosen = [...el.selectedOptions].map((o) => clip(o.text, 30)).join(", ");
+      extra += ` ${el.multiple ? "multiple " : ""}value="${chosen}" options=[${shown}]${opts.length > 40 ? ` (+${opts.length - 40} more, select_option matches by text)` : ""} -> use select_option`;
     } else if (tag === "a") {
       extra += ` href=${clip(el.getAttribute("href"), 70)}`;
+    }
+    if (tag !== "select") {
+      // Custom dropdowns: show whether they are open, so the model can verify a click worked.
+      const exp = el.getAttribute("aria-expanded");
+      if (exp === "true" || exp === "false") extra += exp === "true" ? " (open)" : " (closed)";
+      else if (el.getAttribute("aria-haspopup") && el.getAttribute("aria-haspopup") !== "false") extra += " (opens a popup)";
+      if (el.getAttribute("aria-selected") === "true") extra += " (selected)";
+      if (tag === "input" && el.list) extra += ` suggestions=[${[...el.list.options].slice(0, 10).map((o) => clip(o.value, 25)).join(" | ")}]`;
     }
     const inView = r.bottom > 0 && r.top < innerHeight && r.right > 0 && r.left < innerWidth;
     labels[n] = `${role || tag}${type ? ":" + type : ""} "${label}"`;
@@ -417,15 +430,7 @@ function pageType(id, text, submit) {
   if (!el) return { ok: false, error: "Element not found. Call get_page_state to refresh element indices." };
   el.scrollIntoView({ block: "center" });
   el.focus();
-  if (el.tagName === "SELECT") {
-    const opt = [...el.options].find((o) => o.text.trim().toLowerCase() === text.trim().toLowerCase() || o.value === text) ||
-      [...el.options].find((o) => o.text.toLowerCase().includes(text.toLowerCase()));
-    if (!opt) return { ok: false, error: "No matching <select> option: " + text };
-    el.value = opt.value;
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    el.dispatchEvent(new Event("change", { bubbles: true }));
-    return { ok: true, selected: opt.text };
-  }
+  if (el.tagName === "SELECT") return { ok: false, isSelect: true, error: "This is a <select> dropdown; use select_option." };
   if (el.isContentEditable) {
     document.execCommand("selectAll", false);
     document.execCommand("insertText", false, text);
@@ -494,7 +499,8 @@ async function pageMouse(action, a) {
   if (action === "cursor") {
     place(a.x, a.y);
     if (a.ripple) ripple(a.x, a.y);
-    return { ok: true, hit: desc(deep(a.x, a.y)) };
+    const under = deep(a.x, a.y);
+    return { ok: true, hit: desc(under), tag: under?.tagName?.toLowerCase() };
   }
   if (action === "focused") {
     const el = focusedEl();
@@ -620,7 +626,62 @@ function pageLocate(id) {
   if (!el) return { ok: false, error: "Element not found. Call get_page_state to refresh element indices." };
   el.scrollIntoView({ block: "center", inline: "center" });
   const r = el.getBoundingClientRect();
-  return { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  const out = { ok: true, x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) };
+  if (el.tagName === "SELECT") {
+    out.select = {
+      multiple: el.multiple,
+      total: el.options.length,
+      options: [...el.options].slice(0, 40).map((o, k) => `${k}:${o.text.replace(/\s+/g, " ").trim().slice(0, 30)}${o.selected ? "*" : ""}${o.disabled ? "(x)" : ""}`),
+    };
+  }
+  return out;
+}
+
+// Choose option(s) of a native <select> by text, value or position, firing the events frameworks listen for.
+function pageSelect(id, wanted, byIndex, add) {
+  const el = document.querySelector(`[data-gx-id="${id}"]`);
+  if (!el) return { ok: false, error: "Element not found. Call get_page_state to refresh element indices." };
+  if (el.tagName !== "SELECT") {
+    return { ok: false, error: `Element [${id}] is not a native <select> (it is a ${el.tagName.toLowerCase()}). For a custom dropdown: click it to open, read the page state, then click the option.` };
+  }
+  el.scrollIntoView({ block: "center" });
+  el.focus({ preventScroll: true });
+  const opts = [...el.options];
+  const norm = (t) => String(t).replace(/\s+/g, " ").trim().toLowerCase();
+  const listing = () => opts.slice(0, 40).map((o, k) => `${k}:${o.text.replace(/\s+/g, " ").trim().slice(0, 30)}${o.disabled ? "(x)" : ""}`);
+  const targets = [];
+  for (const w of byIndex) {
+    if (!(w >= 0 && w < opts.length)) return { ok: false, error: `Option position ${w} is out of range (0-${opts.length - 1}).`, options: listing() };
+    targets.push(opts[w]);
+  }
+  for (const w of wanted) {
+    const q = norm(w);
+    let hits = opts.filter((o) => norm(o.text) === q);
+    if (!hits.length) hits = opts.filter((o) => o.value === String(w));
+    if (!hits.length) hits = opts.filter((o) => norm(o.value) === q);
+    if (!hits.length) hits = opts.filter((o) => norm(o.text).startsWith(q));
+    if (!hits.length) hits = opts.filter((o) => norm(o.text).includes(q));
+    if (!hits.length) return { ok: false, error: `No option matches "${w}".`, options: listing() };
+    if (hits.length > 1) {
+      const enabled = hits.filter((o) => !o.disabled);
+      if (enabled.length === 1) hits = enabled;
+      else return { ok: false, error: `"${w}" matches ${hits.length} options; be more specific or use option_index.`, matches: hits.slice(0, 10).map((o) => `${opts.indexOf(o)}:${o.text.trim().slice(0, 30)}`) };
+    }
+    targets.push(hits[0]);
+  }
+  if (targets.length > 1 && !el.multiple) return { ok: false, error: "This <select> allows only one choice." };
+  const bad = targets.find((o) => o.disabled);
+  if (bad) return { ok: false, error: `Option "${bad.text.trim()}" is disabled.`, options: listing() };
+  if (el.multiple) {
+    if (!add) opts.forEach((o) => { o.selected = targets.includes(o); });
+    else targets.forEach((o) => { o.selected = true; });
+  } else {
+    el.selectedIndex = opts.indexOf(targets[0]);
+  }
+  el.dispatchEvent(new Event("input", { bubbles: true }));
+  el.dispatchEvent(new Event("change", { bubbles: true }));
+  const now = [...el.selectedOptions].map((o) => o.text.replace(/\s+/g, " ").trim());
+  return { ok: true, selected: now, value: el.value };
 }
 
 function pageKey(key) {
@@ -737,6 +798,10 @@ const BUTTONS = { left: ["left", 1], right: ["right", 2], middle: ["middle", 4] 
 async function trustedClickPx(x, y, opts = {}) {
   const cur = await showCursor(x, y, true);
   await sleep(220); // let the cursor glide there
+  if (cur?.tag === "select" && !opts.allowSelect) {
+    // A real click opens the browser's native popup, which can be neither seen nor operated. Redirect instead.
+    return { ok: true, trusted: true, pixel: [x, y], hit: cur.hit, clicked: false, note: "There is a native <select> dropdown here, so it was NOT clicked (its popup cannot be operated). Use select_option(index, option) with the select's element number from get_page_state." };
+  }
   const [name, mask] = BUTTONS[opts.button] || BUTTONS.left;
   await mouseEv("mouseMoved", x, y);
   for (let n = 1; n <= (opts.double ? 2 : 1); n++) {
@@ -885,6 +950,9 @@ const tools = {
     run: async (a) => {
       const loc = await inPage(pageLocate, [a.index]);
       if (!loc?.ok) return loc;
+      if (loc.select) {
+        return { ok: true, clicked: false, note: "Element [" + a.index + "] is a native <select> dropdown; clicking it only opens a browser popup that cannot be operated, so it was NOT clicked. Use select_option(index, option) instead.", select: loc.select };
+      }
       await sleep(120);
       const r = await viaTrusted(
         () => trustedClickPx(loc.x, loc.y),
@@ -900,8 +968,25 @@ const tools = {
     describe: (a) => `Type "${a.text}" into [${a.index}] ${lastLabels[a.index] || ""}${a.submit ? " and press Enter" : ""}`,
     run: async (a) => {
       const r = await inPage(pageType, [a.index, String(a.text ?? ""), !!a.submit]);
+      if (r?.isSelect) return tools.select_option.run({ index: a.index, option: String(a.text ?? "") });
       if (!r?.ok) return r;
       await waitForLoad(activeTabId, a.submit ? 6000 : 1000);
+      return { ...r, page: await stateText() };
+    },
+  },
+  select_option: {
+    risky: true,
+    describe: (a) => {
+      const what = a.options?.length ? a.options.join(", ") : a.option ?? `position ${a.option_index}`;
+      return `Select "${what}" in [${a.index}] ${lastLabels[a.index] || ""}`;
+    },
+    run: async (a) => {
+      const wanted = [...(Array.isArray(a.options) ? a.options : []), ...(a.option !== undefined && a.option !== "" ? [a.option] : [])].map(String);
+      const byIndex = [a.option_index, ...(Array.isArray(a.option_indexes) ? a.option_indexes : [])].filter((n) => Number.isInteger(n));
+      if (!wanted.length && !byIndex.length) return { ok: false, error: "Provide option (text or value), options (for a multi-select) or option_index." };
+      const r = await inPage(pageSelect, [a.index, wanted, byIndex, !!a.add]);
+      if (!r?.ok) return r;
+      await waitForLoad(activeTabId, 2500); // some pages navigate or reload on change
       return { ...r, page: await stateText() };
     },
   },
@@ -1104,6 +1189,7 @@ const functionDeclarations = [
   { name: "get_page_text", description: "Get the full visible text of the page (up to 20k chars). Use for reading or summarizing content.", parameters: obj({}) },
   { name: "click", description: "PREFERRED way to click. Click an element by its index from the latest page state. Use this instead of coordinates or scripts whenever the element has an index.", parameters: obj({ index: { type: I } }, ["index"]) },
   { name: "type_text", description: "PREFERRED way to type or pick a dropdown option when the element has an index. Type text into an input/textarea/contenteditable, or choose an option in a select, by index. Replaces existing content.", parameters: obj({ index: { type: I }, text: { type: S }, submit: { type: "BOOLEAN", description: "Press Enter afterwards" } }, ["index", "text"]) },
+  { name: "select_option", description: "BEST way to use a native <select> dropdown (shown as 'select ... options=[0:A | 1:B*]' in the page state; * = selected). Pass the select's element index and the option's visible text (or value) in 'option'. For a multi-select pass 'options' (list) and optionally add=true to keep existing choices. option_index picks by 0-based position. Never click a native select; use this. Custom dropdowns (div/button/listbox) are different: click to open, then click the option.", parameters: obj({ index: { type: I }, option: { type: S }, options: { type: "ARRAY", items: { type: S } }, option_index: { type: I }, add: { type: "BOOLEAN" } }, ["index"]) },
   { name: "press_key", description: "Press a key (e.g. Enter, Escape, Tab) on the focused element.", parameters: obj({ key: { type: S } }, ["key"]) },
   { name: "scroll", description: "Scroll the page.", parameters: obj({ direction: { type: S, enum: ["up", "down", "top", "bottom"] }, pixels: { type: I } }, ["direction"]) },
   { name: "move_mouse", description: "Move the virtual cursor to (x, y) on a 0-999 grid over the viewport (0,0 = top-left, 999,999 = bottom-right) and fire hover events. Returns the element under the cursor.", parameters: obj({ x: { type: I }, y: { type: I } }, ["x", "y"]) },
@@ -1305,7 +1391,7 @@ async function send() {
 
 // Calls that change what is on the page, and calls that rely on element numbers / coordinates / focus.
 const PAGE_CHANGING = new Set(["click", "click_at", "navigate", "go_back", "press_key", "switch_tab", "open_tab", "close_tab", "drag"]);
-const PAGE_DEPENDENT = new Set(["click", "click_at", "type_text", "type_keys", "press_key", "move_mouse", "drag", "scroll_at"]);
+const PAGE_DEPENDENT = new Set(["click", "click_at", "type_text", "type_keys", "select_option", "press_key", "move_mouse", "drag", "scroll_at"]);
 const changesPage = (name, args) => PAGE_CHANGING.has(name) || ((name === "type_text" || name === "type_keys") && !!args.submit);
 
 async function agentLoop(signal) {
