@@ -16,7 +16,7 @@ button:hover { background: #e9e9e9; }
 details { padding: 6px 12px; border-bottom: 1px solid #ddd; }
 summary { cursor: pointer; }
 details label { display: block; margin: 8px 0; }
-details input[type=text], details input[type=password] { display: block; width: 100%; margin-top: 3px; padding: 5px 8px; border: 1px solid #bbb; border-radius: 6px; font: inherit; }
+details input[type=text], details input[type=password], details input[type=number] { display: block; width: 100%; margin-top: 3px; padding: 5px 8px; border: 1px solid #bbb; border-radius: 6px; font: inherit; }
 label.row { display: flex; gap: 6px; align-items: flex-start; }
 .hint { color: #666; font-size: 12px; margin: 8px 0 2px; }
 #log { flex: 1; overflow-y: auto; padding: 10px 12px; }

@@ -2,12 +2,11 @@
 //   user task -> Gemini (with tools) -> tool calls executed in the browser -> results back -> ... -> final answer.
 
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta/models/";
-const MAX_STEPS = 40;
 
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 
-let settings = { apiKey: "", model: "gemini-3.5-flash-lite", approve: true, yolo: false };
+let settings = { apiKey: "", model: "gemini-3.5-flash-lite", approve: true, yolo: false, unlimited: false, maxSteps: 40 };
 let history = [];          // Gemini "contents" array
 let running = false;
 let abortCtl = null;
@@ -55,17 +54,22 @@ function askApproval(description) {
 // ---------------------------------------------------------------- settings
 
 async function loadSettings() {
-  const s = await chrome.storage.local.get(["apiKey", "model", "approve", "yolo"]);
+  const s = await chrome.storage.local.get(["apiKey", "model", "approve", "yolo", "unlimited", "maxSteps"]);
   settings = {
     apiKey: s.apiKey || "",
     model: s.model || "gemini-3.5-flash-lite",
     approve: s.approve !== false,
     yolo: s.yolo === true,
+    unlimited: s.unlimited === true,
+    maxSteps: Math.max(1, parseInt(s.maxSteps) || 40),
   };
   $("apiKey").value = settings.apiKey;
   $("model").value = settings.model;
   $("approve").checked = settings.approve;
   $("yolo").checked = settings.yolo;
+  $("unlimited").checked = settings.unlimited;
+  $("maxSteps").value = settings.maxSteps;
+  $("maxSteps").disabled = settings.unlimited;
   document.body.classList.toggle("yolo-on", settings.yolo);
   if (!settings.apiKey) $("settings").open = true;
 }
@@ -76,6 +80,8 @@ $("save").onclick = async () => {
     model: $("model").value.trim() || "gemini-3.5-flash-lite",
     approve: $("approve").checked,
     yolo: $("yolo").checked,
+    unlimited: $("unlimited").checked,
+    maxSteps: Math.max(1, parseInt($("maxSteps").value) || 40),
   };
   await chrome.storage.local.set(settings);
   $("settings").open = false;
@@ -87,6 +93,14 @@ $("yolo").onchange = async () => {
   document.body.classList.toggle("yolo-on", settings.yolo);
   await chrome.storage.local.set({ yolo: settings.yolo });
   addMsg("tool", settings.yolo ? "YOLO mode ON: the agent will act without asking." : "YOLO mode off.");
+};
+
+// Takes effect immediately, even in the middle of a running task.
+$("unlimited").onchange = async () => {
+  settings.unlimited = $("unlimited").checked;
+  $("maxSteps").disabled = settings.unlimited;
+  await chrome.storage.local.set({ unlimited: settings.unlimited });
+  addMsg("tool", settings.unlimited ? "Unlimited steps ON: the agent runs until the task is done or you press Stop." : `Step limit back to ${settings.maxSteps}.`);
 };
 
 $("clear").onclick = () => { if (!running) { history = []; logEl.textContent = ""; } };
@@ -967,13 +981,37 @@ async function callGemini(signal) {
   }
 }
 
-// Keep only the newest page snapshot in history to limit token usage.
-function pruneOldSnapshots() {
-  for (const c of history) {
-    for (const p of c.parts || []) {
-      if (p.functionResponse?.response?.page) p.functionResponse.response.page = "[older page state omitted]";
+// Keep history small so long (or unlimited) runs don't blow up the context window:
+// only the newest page snapshot, the 2 newest screenshots, and clipped older tool outputs.
+function pruneHistory() {
+  let images = 0;
+  for (let i = history.length - 1; i >= 0; i--) {
+    for (const p of history[i].parts || []) {
+      if (p.inlineData && ++images > 2) { delete p.inlineData; p.text = "[older screenshot omitted]"; }
+      const resp = p.functionResponse?.response;
+      if (!resp) continue;
+      if (resp.page) resp.page = "[older page state omitted]";
+      for (const k of Object.keys(resp)) {
+        if (typeof resp[k] === "string" && resp[k].length > 1500) resp[k] = resp[k].slice(0, 1500) + "… [older output clipped]";
+        else if (Array.isArray(resp[k]) && JSON.stringify(resp[k]).length > 1500) resp[k] = JSON.stringify(resp[k]).slice(0, 1500) + "… [older output clipped]";
+      }
     }
   }
+}
+
+// Safety net: if the prompt is still huge, drop the oldest (call, result) pairs after the first message.
+const MAX_PROMPT_TOKENS = 600000;
+function trimHistory(promptTokens) {
+  if (!promptTokens || promptTokens < MAX_PROMPT_TOKENS) return;
+  let dropped = 0;
+  while (dropped < 40 && history.length > 4) {
+    const a = history[1], b = history[2];
+    const isPair = a?.role === "model" && a.parts?.some((p) => p.functionCall) && b?.role === "user" && b.parts?.some((p) => p.functionResponse);
+    if (!isPair) break;
+    history.splice(1, 2);
+    dropped++;
+  }
+  if (dropped) addMsg("tool", `Trimmed ${dropped} old steps from memory to stay within the context window.`);
 }
 
 // ---------------------------------------------------------------- agent loop
@@ -1005,9 +1043,11 @@ async function send() {
 }
 
 async function agentLoop(signal) {
-  for (let step = 0; step < MAX_STEPS; step++) {
+  let lastSig = "", repeats = 0;
+  for (let step = 0; settings.unlimited || step < settings.maxSteps; step++) {
     if (signal.aborted) throw new Error("Stopped.");
     const data = await callGemini(signal);
+    trimHistory(data.usageMetadata?.promptTokenCount);
     const content = data.candidates?.[0]?.content;
     if (!content?.parts?.length) {
       const why = data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || "empty response";
@@ -1045,16 +1085,23 @@ async function agentLoop(signal) {
         }
         if (result?.error) logLine.classList.add("err");
       }
+      // Nudge the model if it is stuck repeating the exact same action (matters most with unlimited steps).
+      const sig = call.name + JSON.stringify(args);
+      repeats = sig === lastSig ? repeats + 1 : 0;
+      lastSig = sig;
+      if (repeats >= 4 && result && typeof result === "object") {
+        result.warning = `You have run this exact action ${repeats + 1} times in a row. If it is not working, try a different approach or ask the user for help.`;
+      }
       if (result?._image) { images.push(result._image); delete result._image; }
       responseParts.push({ functionResponse: { name: call.name, response: result ?? {} } });
       if (signal.aborted) throw new Error("Stopped.");
     }
 
-    pruneOldSnapshots();
+    pruneHistory();
     for (const img of images) responseParts.push({ inlineData: { mimeType: "image/jpeg", data: img } });
     history.push({ role: "user", parts: responseParts });
   }
-  addMsg("error", `Reached the ${MAX_STEPS}-step limit. Send another message to continue.`);
+  addMsg("error", `Reached the ${settings.maxSteps}-step limit. Send another message to continue, or enable Unlimited steps in Settings.`);
 }
 
 loadSettings();

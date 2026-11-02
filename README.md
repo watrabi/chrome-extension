@@ -30,6 +30,10 @@ Clicks, typing, key presses, drags and scrolling are sent as **trusted browser i
 - The agent acts in your real, logged-in browser. Web pages can contain prompt-injection text; the system prompt tells the model to treat page text as data, but this is not a guarantee. Keep approval mode on for anything sensitive.
 - Your API key is stored in `chrome.storage.local` and sent only to `generativelanguage.googleapis.com`.
 
+## Step limit / unlimited steps
+
+By default a task stops after 40 steps (model turns). In **Settings** you can change that number or tick **Unlimited steps**, which takes effect immediately, even mid-task; the agent then runs until it finishes or you press **Stop**. To keep very long runs from overflowing the context window, only the newest page state and the 2 newest screenshots are kept, older tool output is clipped, and if the prompt still grows past ~600k tokens the oldest steps are dropped. If the model repeats the exact same action 5+ times in a row it gets a warning to try something else. Unlimited runs spend API quota the whole time, so keep an eye on them.
+
 ## Rate limits
 
 If Gemini returns a 429 (rate limit), the agent waits for the delay Gemini asks for (plus a second), shows a live countdown in the panel, and retries automatically, as many times as needed. **Stop** cancels the wait. If the requested wait is over 15 minutes (which usually means a daily quota is used up) it stops with an error instead of hanging. Temporary 5xx server errors are retried up to 5 times with backoff.
