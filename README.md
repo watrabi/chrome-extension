@@ -13,6 +13,8 @@ A small Chrome extension (Manifest V3) that connects to the Gemini API and lets 
 
 `get_page_state`, `get_page_text`, `click`, `type_text`, `press_key`, `scroll`, `navigate`, `go_back`, `wait`, `list_tabs`, `switch_tab`, `open_tab`, `close_tab`, `screenshot`.
 
+**Virtual cursor** (a blue arrow drawn on the page, also visible in screenshots): `move_mouse`, `click_at` (left/right/double), `drag`, `scroll_at` (scrolls the panel under the point, or the page), `type_keys` (types into the focused field). Coordinates are viewport CSS pixels; screenshots are scaled so image pixels match them 1:1, and the page state lists each element's `@x,y` center. Use these for canvases, maps, custom widgets and anything without a usable element index.
+
 It sees pages as a numbered list of interactive elements plus a text excerpt, and refers to elements by number. It works in the current window's active tab at the time you send a message.
 
 ## Safety
