@@ -7,7 +7,7 @@ const MAX_STEPS = 40;
 const $ = (id) => document.getElementById(id);
 const logEl = $("log");
 
-let settings = { apiKey: "", model: "gemini-2.5-flash", approve: true };
+let settings = { apiKey: "", model: "gemini-3.5-flash-lite", approve: true };
 let history = [];          // Gemini "contents" array
 let running = false;
 let abortCtl = null;
@@ -58,7 +58,7 @@ async function loadSettings() {
   const s = await chrome.storage.local.get(["apiKey", "model", "approve"]);
   settings = {
     apiKey: s.apiKey || "",
-    model: s.model || "gemini-2.5-flash",
+    model: s.model || "gemini-3.5-flash-lite",
     approve: s.approve !== false,
   };
   $("apiKey").value = settings.apiKey;
@@ -70,7 +70,7 @@ async function loadSettings() {
 $("save").onclick = async () => {
   settings = {
     apiKey: $("apiKey").value.trim(),
-    model: $("model").value.trim() || "gemini-2.5-flash",
+    model: $("model").value.trim() || "gemini-3.5-flash-lite",
     approve: $("approve").checked,
   };
   await chrome.storage.local.set(settings);

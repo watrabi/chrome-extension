@@ -25,5 +25,5 @@ It sees pages as a numbered list of interactive elements plus a text excerpt, an
 
 - Synthetic DOM events: some sites ignore non-trusted clicks/keys, and elements inside shadow DOM or cross-origin iframes are not seen.
 - Cannot run on `chrome://` pages or the Chrome Web Store.
-- The default model is `gemini-2.5-flash`; change it in Settings (any Gemini model that supports function calling).
+- The default model is `gemini-3.5-flash-lite`; change it in Settings (any Gemini model that supports function calling).
 - No icons are bundled; Chrome shows a default one.
